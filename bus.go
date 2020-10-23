@@ -3,6 +3,7 @@ package messagebus
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"sync"
 )
 
@@ -32,6 +33,11 @@ type messageBus struct {
 	handlers         handlersMap
 }
 
+//get func name, like main.func1
+func GetFunctionName(i interface{}) string {
+	return runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
+}
+
 func (b *messageBus) Publish(topic string, args ...interface{}) {
 	rArgs := buildHandlerArgs(args)
 
@@ -40,7 +46,38 @@ func (b *messageBus) Publish(topic string, args ...interface{}) {
 
 	if hs, ok := b.handlers[topic]; ok {
 		for _, h := range hs {
-			h.queue <- rArgs
+			//edit by mo
+			//check args num if ok
+			ft := h.callback.Type()
+			if ft.NumIn() != len(args) {
+				fmt.Printf("param num Invalid, FunName:%s, funType:%s, param num:%d, but public args num:%d\n",
+					GetFunctionName(h.callback.Interface()), ft.String(), ft.NumIn(), len(args))
+			}
+			//check every in param type if ok
+			paramInvalid := false
+			for i := 0; i < len(args); i++ {
+				at := reflect.TypeOf(args[i])
+				it := ft.In(i)
+				if it != at {
+					fmt.Printf("paramInvalid, %s:%s, parament[%d]'s type:%s, but args[%d]'s type:%s\n",
+						GetFunctionName(h.callback.Interface()), ft.String(), i, it.String(), i, at.String())
+					paramInvalid = true
+					//break //let it check all paraments
+				}
+			}
+			if paramInvalid {
+				continue
+			}
+
+			//make it non block, avoid one hs slow and block this goroutine to send args to another hs
+			//h.queue <- rArgs
+			select {
+			case h.queue <- rArgs:
+			default:
+				fmt.Printf("%s, topic:%s droped because args queue(%d) is full, \n",
+					ft.String(), topic, len(h.queue))
+			}
+			//end by mo
 		}
 	}
 }
